@@ -1,4 +1,4 @@
-name: Post daily readings
+name: Post daily readings and saints
 
 on:
   schedule:
@@ -12,6 +12,11 @@ on:
       date:
         description: "Date to post (YYYY-MM-DD). Leave blank for today."
         required: false
+      post:
+        description: "What to post"
+        type: choice
+        options: [both, readings, saints]
+        default: both
 
 permissions:
   contents: read
@@ -40,13 +45,16 @@ jobs:
         if: steps.gate.outputs.run == 'true'
 
       - name: Post readings
-        if: steps.gate.outputs.run == 'true'
+        if: steps.gate.outputs.run == 'true' && inputs.post != 'saints'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DATE: ${{ inputs.date }}
-        run: |
-          if [ -n "$DATE" ]; then
-            python3 post_readings.py --date "$DATE"
-          else
-            python3 post_readings.py
-          fi
+        run: python3 post_readings.py --date "$DATE"
+
+      # Runs even if the readings step failed, so one bad post doesn't block the other.
+      - name: Post saints
+        if: ${{ !cancelled() && steps.gate.outputs.run == 'true' && inputs.post != 'readings' }}
+        env:
+          DISCORD_SAINTS_WEBHOOK_URL: ${{ secrets.DISCORD_SAINTS_WEBHOOK_URL }}
+          DATE: ${{ inputs.date }}
+        run: python3 post_saints.py --date "$DATE"

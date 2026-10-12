@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from unittest import mock
 
+import common
 import post_readings as pr
 
 
@@ -15,36 +16,6 @@ def reading(kind, text, prokeimenon=None):
         "prokeimenon": prokeimenon,
         "text": text,
     }
-
-
-class HtmlToTextTest(unittest.TestCase):
-    def test_paragraphs_breaks_and_entities(self):
-        html = "<p>In the  beginning &amp; the\n end.</p><p>Line one<br>Line two</p>"
-        self.assertEqual(
-            pr.html_to_text(html),
-            "In the beginning & the end.\n\nLine one\nLine two",
-        )
-
-
-class SplitTextTest(unittest.TestCase):
-    def test_short_text_is_one_chunk(self):
-        self.assertEqual(pr.split_text("Short.", 100), ["Short."])
-
-    def test_prefers_paragraph_boundary(self):
-        text = "a" * 60 + "\n\n" + "b" * 60
-        self.assertEqual(pr.split_text(text, 100), ["a" * 60, "b" * 60])
-
-    def test_falls_back_to_sentence_boundary_keeping_closing_quote(self):
-        text = 'He said, "' + "x" * 60 + '." Then ' + "y" * 60
-        chunks = pr.split_text(text, 100)
-        self.assertTrue(chunks[0].endswith('."'))
-        self.assertTrue(chunks[1].startswith("Then"))
-
-    def test_chunks_respect_limit_and_keep_all_words(self):
-        text = " ".join(["word"] * 5000)
-        chunks = pr.split_text(text, pr.MAX_DESCRIPTION)
-        self.assertTrue(all(len(chunk) <= pr.MAX_DESCRIPTION for chunk in chunks))
-        self.assertEqual(" ".join(chunks), text)
 
 
 class BuildMessagesTest(unittest.TestCase):
@@ -76,10 +47,10 @@ class BuildMessagesTest(unittest.TestCase):
 
         self.assertGreater(len(messages), 1)
         for message in messages:
-            self.assertLessEqual(len(message["embeds"]), pr.MAX_EMBEDS_PER_MESSAGE)
-            self.assertLessEqual(sum(map(pr.embed_size, message["embeds"])), pr.MAX_EMBED_CHARS_PER_MESSAGE)
+            self.assertLessEqual(len(message["embeds"]), common.MAX_EMBEDS_PER_MESSAGE)
+            self.assertLessEqual(sum(map(common.embed_size, message["embeds"])), common.MAX_EMBED_CHARS_PER_MESSAGE)
             for embed in message["embeds"]:
-                self.assertLessEqual(len(embed["description"]), pr.MAX_DESCRIPTION)
+                self.assertLessEqual(len(embed["description"]), common.MAX_DESCRIPTION)
         continued = [e for m in messages for e in m["embeds"] if e["author"]["name"] == "Gospel (continued)"]
         self.assertTrue(continued)
         self.assertTrue(all("title" not in e for e in continued))
@@ -119,10 +90,10 @@ def full_reading(url):
 
 class FetchDayTest(unittest.TestCase):
     def fetch(self, day, feed):
-        def fake_fetch_xml(url):
-            return ET.fromstring(feed) if "daily.asp" in url else full_reading(url)
-
-        with mock.patch.object(pr, "fetch_xml", side_effect=fake_fetch_xml):
+        with (
+            mock.patch.object(pr, "daily_feed", return_value=ET.fromstring(feed)),
+            mock.patch.object(pr, "fetch_xml", side_effect=full_reading),
+        ):
             return pr.fetch_day(day)
 
     def test_sunday_posts_matins_gospel_first_with_eothinon(self):
