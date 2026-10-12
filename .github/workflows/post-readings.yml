@@ -1,0 +1,52 @@
+name: Post daily readings
+
+on:
+  schedule:
+    # 7:00 AM Central. Cron runs in UTC: 12:00 UTC is 7 AM during daylight
+    # saving time (CDT) and 13:00 UTC is 7 AM in winter (CST). The gate step
+    # lets only the line that matches today's offset post.
+    - cron: "0 12 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to post (YYYY-MM-DD). Leave blank for today."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check this is the 7 AM Central run
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$(TZ=America/Chicago date +%z) $SCHEDULE" in
+            "-0500 0 12 * * *" | "-0600 0 13 * * *") echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Skipping: this cron line is for the other side of daylight saving time." ;;
+          esac
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - name: Post readings
+        if: steps.gate.outputs.run == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DATE: ${{ inputs.date }}
+        run: |
+          if [ -n "$DATE" ]; then
+            python3 post_readings.py --date "$DATE"
+          else
+            python3 post_readings.py
+          fi
