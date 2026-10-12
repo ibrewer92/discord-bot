@@ -32,6 +32,6 @@ python3 -m unittest discover -s tests
 
 ## Schedule
 
-`.github/workflows/post-readings.yml` posts both at 7:00 AM Central every day. GitHub cron runs in UTC, so the workflow has one line for daylight saving time and one for winter, and a gate step lets only the matching one post. Scheduled runs can start 5 to 30 minutes late. If one post fails, the other still runs.
+`.github/workflows/post-readings.yml` posts both at 7:05 AM Central every day, with backup runs at :35 past each hour until late morning. GitHub delays scheduled runs under load and sometimes drops them, so each run checks whether today's posts already went out (a small per-day marker in the Actions cache) and posts only what's missing. GitHub cron runs in UTC, so the times cover both daylight saving time and winter, and any run before 7 AM Central does nothing. If one post fails, the other still runs, and the next backup retries the failed one.
 
-It reads the webhook URLs from the `DISCORD_WEBHOOK_URL` and `DISCORD_SAINTS_WEBHOOK_URL` repository secrets. To post by hand, for a specific date, or only one of the two, run the workflow from the Actions tab (or `gh workflow run post-readings.yml -f date=2026-12-25 -f post=saints`).
+It reads the webhook URLs from the `DISCORD_WEBHOOK_URL` and `DISCORD_SAINTS_WEBHOOK_URL` repository secrets. To post by hand, for a specific date, or only one of the two, run the workflow from the Actions tab (or `gh workflow run post-readings.yml -f date=2026-12-25 -f post=saints`). Runs started by hand always post; when they post today's, the scheduled runs skip it.

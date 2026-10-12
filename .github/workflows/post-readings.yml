@@ -2,11 +2,13 @@ name: Post daily readings and saints
 
 on:
   schedule:
-    # 7:00 AM Central. Cron runs in UTC: 12:00 UTC is 7 AM during daylight
-    # saving time (CDT) and 13:00 UTC is 7 AM in winter (CST). The gate step
-    # lets only the line that matches today's offset post.
-    - cron: "0 12 * * *"
-    - cron: "0 13 * * *"
+    # Cron runs in UTC, so these cover 7 AM Central in both daylight saving
+    # time (UTC-5) and winter (UTC-6). Runs before 7 AM Central do nothing.
+    # GitHub delays scheduled runs under load and sometimes drops them, so
+    # after the main 7:05 run there are hourly backups, and each run skips
+    # whatever an earlier run already posted that day.
+    - cron: "5 12,13 * * *"
+    - cron: "35 12-16 * * *"
   workflow_dispatch:
     inputs:
       date:
@@ -21,40 +23,107 @@ on:
 permissions:
   contents: read
 
+# One run at a time, so a backup can't post while an earlier run is still posting.
+concurrency:
+  group: daily-posts
+  cancel-in-progress: false
+
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Check this is the 7 AM Central run
-        id: gate
+      - name: Decide what to post
+        id: plan
         env:
           EVENT: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
+          POST: ${{ inputs.post }}
+          DATE: ${{ inputs.date }}
         run: |
-          if [ "$EVENT" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          today=$(TZ=America/Chicago date +%F)
+          hour=$(TZ=America/Chicago date +%-H)
+          echo "today=$today" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "schedule" ]; then
+            if [ "$hour" -lt 7 ]; then
+              echo "It is before 7 AM Central, so there is nothing to do yet."
+              exit 0
+            fi
+            echo "readings=true" >> "$GITHUB_OUTPUT"
+            echo "saints=true" >> "$GITHUB_OUTPUT"
+            echo "mark=true" >> "$GITHUB_OUTPUT"
+          else
+            # Runs started by hand always post. When they post today's,
+            # they also stop the scheduled runs from posting it again.
+            if [ "$POST" != "saints" ]; then
+              echo "readings=true" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "$POST" != "readings" ]; then
+              echo "saints=true" >> "$GITHUB_OUTPUT"
+            fi
+            if [ -z "$DATE" ] || [ "$DATE" = "$today" ]; then
+              echo "mark=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
-          case "$(TZ=America/Chicago date +%z) $SCHEDULE" in
-            "-0500 0 12 * * *" | "-0600 0 13 * * *") echo "run=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "Skipping: this cron line is for the other side of daylight saving time." ;;
-          esac
+
+      - name: Check whether today's readings already posted
+        id: readings_done
+        if: github.event_name == 'schedule' && steps.plan.outputs.readings == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .posted
+          key: posted-readings-${{ steps.plan.outputs.today }}
+          lookup-only: true
+
+      - name: Check whether today's saints already posted
+        id: saints_done
+        if: github.event_name == 'schedule' && steps.plan.outputs.saints == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .posted
+          key: posted-saints-${{ steps.plan.outputs.today }}
+          lookup-only: true
 
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          (steps.plan.outputs.readings == 'true' && steps.readings_done.outputs.cache-hit != 'true') ||
+          (steps.plan.outputs.saints == 'true' && steps.saints_done.outputs.cache-hit != 'true')
 
       - name: Post readings
-        if: steps.gate.outputs.run == 'true' && inputs.post != 'saints'
+        id: post_readings
+        if: steps.plan.outputs.readings == 'true' && steps.readings_done.outputs.cache-hit != 'true'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DATE: ${{ inputs.date }}
         run: python3 post_readings.py --date "$DATE"
 
-      # Runs even if the readings step failed, so one bad post doesn't block the other.
+      - name: Prepare readings marker
+        if: steps.post_readings.outcome == 'success' && steps.plan.outputs.mark == 'true'
+        run: mkdir -p .posted && date -u > .posted/readings
+
+      - name: Record that today's readings posted
+        if: steps.post_readings.outcome == 'success' && steps.plan.outputs.mark == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .posted
+          key: posted-readings-${{ steps.plan.outputs.today }}
+
+      # The saints steps run even if the readings failed, so one bad post
+      # doesn't block the other.
       - name: Post saints
-        if: ${{ !cancelled() && steps.gate.outputs.run == 'true' && inputs.post != 'readings' }}
+        id: post_saints
+        if: ${{ !cancelled() && steps.plan.outputs.saints == 'true' && steps.saints_done.outputs.cache-hit != 'true' }}
         env:
           DISCORD_SAINTS_WEBHOOK_URL: ${{ secrets.DISCORD_SAINTS_WEBHOOK_URL }}
           DATE: ${{ inputs.date }}
         run: python3 post_saints.py --date "$DATE"
+
+      - name: Prepare saints marker
+        if: ${{ !cancelled() && steps.post_saints.outcome == 'success' && steps.plan.outputs.mark == 'true' }}
+        run: mkdir -p .posted && date -u > .posted/saints
+
+      - name: Record that today's saints posted
+        if: ${{ !cancelled() && steps.post_saints.outcome == 'success' && steps.plan.outputs.mark == 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .posted
+          key: posted-saints-${{ steps.plan.outputs.today }}
