@@ -10,6 +10,7 @@ Usage:
 """
 
 from common import (
+    Bot,
     daily_feed,
     english,
     fetch_xml,
@@ -117,11 +118,15 @@ def build_messages(day):
     return pack_embeds(embeds, f"**{day['formatted_date']}**")
 
 
+BOT = Bot(
+    name="saints",
+    description=__doc__.split("\n\n")[0],
+    build_messages_for=lambda date: build_messages(fetch_saints(date)),
+    webhook_env="DISCORD_SAINTS_WEBHOOK_URL",
+    username_env="SAINTS_BOT_USERNAME",
+    default_username="Saints of the Day",
+)
+
+
 if __name__ == "__main__":
-    run(
-        __doc__.split("\n\n")[0],
-        lambda date: build_messages(fetch_saints(date)),
-        webhook_env="DISCORD_SAINTS_WEBHOOK_URL",
-        username_env="SAINTS_BOT_USERNAME",
-        default_username="Saints of the Day",
-    )
+    run(BOT)

@@ -15,3 +15,7 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Local scheduler (run_daily.py)
+state/
+logs/

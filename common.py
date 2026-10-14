@@ -11,8 +11,10 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 DAILY_FEED_URL = "https://onlinechapel.goarch.org/daily.asp?date={date:%m/%d/%Y}"
@@ -30,12 +32,21 @@ MAX_EMBED_CHARS_PER_MESSAGE = 6000
 def load_dotenv(path):
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    # utf-8-sig also reads files Windows Notepad saved with a byte-order mark.
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+def load_env():
+    load_dotenv(Path(__file__).with_name(".env"))
+
+
+def today():
+    return dt.datetime.now(ZoneInfo(os.environ.get("BOT_TIMEZONE", "America/Chicago"))).date()
 
 
 def fetch_xml(url, attempts=3):
@@ -188,6 +199,10 @@ def pack_embeds(embeds, content):
     return messages
 
 
+class PostError(Exception):
+    """A webhook post failed, or a webhook URL isn't set."""
+
+
 def post(webhook_url, message, username):
     payload = {"username": username, "allowed_mentions": {"parse": []}, **message}
     request = urllib.request.Request(
@@ -203,17 +218,46 @@ def post(webhook_url, message, username):
         except urllib.error.HTTPError as error:
             if error.code != 429 or attempt == 3:
                 detail = error.read().decode(errors="replace")
-                raise SystemExit(f"Discord webhook returned {error.code}: {detail}") from error
+                raise PostError(f"Discord webhook returned {error.code}: {detail}") from error
             retry_after = json.loads(error.read() or b"{}").get("retry_after", 2)
             time.sleep(float(retry_after) + 0.5)
 
 
-def run(description, build_messages_for, webhook_env, username_env, default_username):
-    """Command-line entry point shared by the bots: work out the date, build
-    the messages, then print them (--dry-run) or post them."""
-    load_dotenv(Path(__file__).with_name(".env"))
+@dataclass(frozen=True)
+class Bot:
+    """One daily post: how to build its messages and where to send them."""
 
-    parser = argparse.ArgumentParser(description=description)
+    name: str
+    description: str
+    build_messages_for: Callable[[dt.date], list]
+    webhook_env: str
+    username_env: str
+    default_username: str
+
+    def webhook_url(self):
+        url = os.environ.get(self.webhook_env)
+        if not url:
+            raise PostError(f"{self.webhook_env} is not set. Add it to .env or the environment.")
+        return url
+
+    def post(self, date):
+        """Build and post the messages for `date`. Returns how many were posted."""
+        messages = self.build_messages_for(date)
+        if not messages:
+            return 0
+        webhook_url = self.webhook_url()
+        username = os.environ.get(self.username_env, self.default_username)
+        for message in messages:
+            post(webhook_url, message, username)
+        return len(messages)
+
+
+def run(bot):
+    """Command-line entry point for one bot: work out the date, then print
+    the messages (--dry-run) or post them."""
+    load_env()
+
+    parser = argparse.ArgumentParser(description=bot.description)
     parser.add_argument(
         "--date",
         type=lambda value: dt.date.fromisoformat(value) if value else None,
@@ -222,21 +266,15 @@ def run(description, build_messages_for, webhook_env, username_env, default_user
     parser.add_argument("--dry-run", action="store_true", help="print the payloads instead of posting")
     args = parser.parse_args()
 
-    timezone = ZoneInfo(os.environ.get("BOT_TIMEZONE", "America/Chicago"))
-    date = args.date or dt.datetime.now(timezone).date()
-    messages = build_messages_for(date)
-
+    date = args.date or today()
     if args.dry_run:
-        print(json.dumps(messages, indent=2, ensure_ascii=False))
+        print(json.dumps(bot.build_messages_for(date), indent=2, ensure_ascii=False))
         return
-    if not messages:
+    try:
+        count = bot.post(date)
+    except PostError as error:
+        sys.exit(str(error))
+    if count:
+        print(f"Posted {count} message(s) for {date.isoformat()}.")
+    else:
         print(f"Nothing to post for {date.isoformat()}.")
-        return
-
-    webhook_url = os.environ.get(webhook_env)
-    if not webhook_url:
-        sys.exit(f"{webhook_env} is not set. Add it to .env or the environment.")
-    username = os.environ.get(username_env, default_username)
-    for message in messages:
-        post(webhook_url, message, username)
-    print(f"Posted {len(messages)} message(s) for {date.isoformat()}.")

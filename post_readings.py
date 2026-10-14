@@ -9,6 +9,7 @@ Usage:
 """
 
 from common import (
+    Bot,
     daily_feed,
     english,
     escape_markdown,
@@ -115,11 +116,15 @@ def build_messages(day):
     return pack_embeds(embeds, header)
 
 
+BOT = Bot(
+    name="readings",
+    description=__doc__.split("\n\n")[0],
+    build_messages_for=lambda date: build_messages(fetch_day(date)),
+    webhook_env="DISCORD_WEBHOOK_URL",
+    username_env="READINGS_BOT_USERNAME",
+    default_username="Daily Readings",
+)
+
+
 if __name__ == "__main__":
-    run(
-        __doc__.split("\n\n")[0],
-        lambda date: build_messages(fetch_day(date)),
-        webhook_env="DISCORD_WEBHOOK_URL",
-        username_env="READINGS_BOT_USERNAME",
-        default_username="Daily Readings",
-    )
+    run(BOT)
