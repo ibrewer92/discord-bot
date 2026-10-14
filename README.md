@@ -32,7 +32,7 @@ python3 -m unittest discover -s tests
 
 ## Running on a Windows PC
 
-`run_daily.py` posts both once a day from an always-on machine. A marker file per post per day (in `state/`) means a second run the same day only posts what's missing, and failed posts retry every 10 minutes for about an hour. Everything is logged to `logs/daily.log`.
+The daily posts run from an always-on Windows PC. `run_daily.py` posts both once a day. A marker file per post per day (in `state/`) means a second run the same day only posts what's missing, and failed posts retry every 10 minutes for about an hour. Everything is logged to `logs/daily.log`.
 
 1. Install Python 3.9 or newer from python.org (it includes the `py` launcher).
 2. Clone this repo, then `copy .env.example .env` and fill in both webhook URLs.
@@ -43,10 +43,16 @@ python3 -m unittest discover -s tests
    This installs the `tzdata` package (Python on Windows has no time zone data of its own), runs a setup check that posts nothing, and registers a Task Scheduler task that runs at 7:00 AM daily, starting tomorrow. The task runs whether or not you're signed in, wakes the PC from sleep, and runs as soon as it can after a missed start. Add `-Time 06:30` to pick another time.
 4. For waking from sleep to work, the power plan must allow wake timers (Control Panel > Power Options > Change plan settings > Change advanced power settings > Sleep > Allow wake timers).
 
-To check setup by hand at any time: `py -3 run_daily.py --dry-run`. After pulling changes, nothing needs reinstalling unless the install script itself changed. Don't run this and the GitHub schedule at the same time; they can't see each other's markers, so both would post.
+To check setup by hand at any time: `py -3 run_daily.py --dry-run`. After pulling changes, nothing needs reinstalling unless the install script itself changed.
 
-## Schedule
+## Manual fallback on GitHub
 
-`.github/workflows/post-readings.yml` posts both at 7:05 AM Central every day, with backup runs at :35 past each hour until late morning. GitHub delays scheduled runs under load and sometimes drops them, so each run checks whether today's posts already went out (a small per-day marker in the Actions cache) and posts only what's missing. GitHub cron runs in UTC, so the times cover both daylight saving time and winter, and any run before 7 AM Central does nothing. If one post fails, the other still runs, and the next backup retries the failed one.
+`.github/workflows/post-readings.yml` posts by hand from GitHub Actions, for a day the PC missed. Run it from the Actions tab, or:
 
-It reads the webhook URLs from the `DISCORD_WEBHOOK_URL` and `DISCORD_SAINTS_WEBHOOK_URL` repository secrets. To post by hand, for a specific date, or only one of the two, run the workflow from the Actions tab (or `gh workflow run post-readings.yml -f date=2026-12-25 -f post=saints`). Runs started by hand always post; when they post today's, the scheduled runs skip it.
+```bash
+gh workflow run post-readings.yml -f post=saints -f date=2026-12-25
+```
+
+Both inputs are optional (`post` is `both`, `readings`, or `saints`; a blank `date` means today). It reads the webhook URLs from the `DISCORD_WEBHOOK_URL` and `DISCORD_SAINTS_WEBHOOK_URL` repository secrets. It can't see the PC's markers, so check the PC didn't post first, or both will.
+
+GitHub used to run the daily posts on a schedule, but its scheduler started runs hours late or dropped them, so the schedule was removed in favor of the PC.
